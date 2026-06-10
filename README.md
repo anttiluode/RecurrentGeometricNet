@@ -1,5 +1,9 @@
 # Dynamic Geometric Net — the trainable v5
 
+EDIT: Try the live app using this (coded by fable)
+
+https://anttiluode.github.io/RecurrentGeometricNet/
+
 EDIT: Added 'chiral eye' that uses this with its own readme. 
 
 ![dynamic geometric net](dynamic_geometric_net.png)
