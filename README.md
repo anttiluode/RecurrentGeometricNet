@@ -1,5 +1,7 @@
 # Dynamic Geometric Net — the trainable v5
 
+EDIT: Added 'chiral eye' that uses this with its own readme. 
+
 ![dynamic geometric net](dynamic_geometric_net.png)
 
 *A geometric-neuron network that **learns its own bands and its own directed edges**, and solves a direction task that no power readout can.*
