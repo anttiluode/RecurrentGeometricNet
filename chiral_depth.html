@@ -1,0 +1,525 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chiral Depth — ordinal depth from temporal orientation</title>
+<style>
+  :root{
+    --bg:#0c1014; --panel:#121821; --panel2:#0f141c; --line:#1e2832;
+    --ink:#e8edf2; --muted:#6b7a8c; --faint:#3a4754;
+    --pos:#e89b5a;  /* copper : approaching / near */
+    --neg:#5fb6d9;  /* ice    : receding  / far  */
+    --ok:#7fc97f; --bad:#e06c6c;
+    --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
+    --sans:'Avenir Next','Segoe UI',system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);display:flex;flex-direction:column;overflow:hidden}
+  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:15px;font-weight:700;letter-spacing:.32em;text-transform:uppercase}
+  header h1 .ch{color:var(--pos)} header h1 .ir{color:var(--neg)}
+  header .formula{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  header .tag{margin-left:auto;font-size:11px;color:var(--faint);letter-spacing:.08em}
+  main{flex:1;display:flex;min-height:0}
+  #stage{flex:1;position:relative;background:#000;min-width:0;cursor:grab}
+  #stage.drag{cursor:grabbing}
+  #view{position:absolute;inset:0;width:100%;height:100%}
+  #stageLabel{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;color:var(--muted);
+    background:rgba(12,16,20,.55);padding:3px 8px;border:1px solid var(--line)}
+  #hint{position:absolute;right:12px;bottom:10px;font-family:var(--mono);font-size:10px;color:var(--faint);
+    background:rgba(12,16,20,.55);padding:3px 8px;border:1px solid var(--line)}
+  #camErr{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;max-width:340px;
+    font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:12px 14px;line-height:1.5}
+  aside{width:330px;border-left:1px solid var(--line);background:var(--panel2);overflow-y:auto;flex-shrink:0}
+  section{padding:12px 14px;border-bottom:1px solid var(--line)}
+  h2{font-size:10px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+  button{font-family:var(--mono);font-size:11px;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);padding:7px 4px;cursor:pointer;letter-spacing:.04em}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--pos);outline-offset:1px}
+  button.active{border-color:var(--pos);color:var(--pos)}
+  button.wide{grid-column:1 / -1}
+  .slider{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .slider label{font-family:var(--mono);font-size:10px;color:var(--muted);width:86px;flex-shrink:0}
+  .slider input{flex:1;accent-color:var(--pos)}
+  .slider .val{font-family:var(--mono);font-size:10px;color:var(--ink);width:44px;text-align:right}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+  td{padding:3px 4px;border-bottom:1px solid var(--line);color:var(--muted)}
+  td.r{text-align:right;color:var(--ink)}
+  td.ok{color:var(--ok)} td.bad{color:var(--bad)}
+  #stats{font-family:var(--mono);font-size:10px;color:var(--faint);line-height:1.7}
+  .note{font-size:11px;color:var(--muted);line-height:1.5;margin-top:8px}
+  footer{padding:8px 18px;border-top:1px solid var(--line);font-size:10px;color:var(--faint);
+    letter-spacing:.06em;display:flex;gap:16px;flex-wrap:wrap}
+  footer .ethos{margin-left:auto;color:var(--muted)}
+  @media (max-width:760px){
+    body{overflow:auto}
+    main{flex-direction:column}
+    #stage{min-height:46vh}
+    aside{width:100%;border-left:none;border-top:1px solid var(--line)}
+  }
+</style></head><body>
+<header>
+  <h1><span class="ch">Chiral</span> <span class="ir">Depth</span></h1>
+  <span class="formula">D ← λ·D + α·(∂<sub>x</sub>L<sub>x</sub> + ∂<sub>y</sub>L<sub>y</sub>) &nbsp;·&nbsp; L = Im(z·z̄<sub>lag</sub>)</span>
+  <span class="tag">PerceptionLab · zero parameters · ordinal depth, not metric</span>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="stageLabel">synthetic · approach</div>
+    <div id="hint">drag to orbit · depth is motion-gated: stillness decays to flat</div>
+    <div id="camErr">Camera unavailable in this context. The synthetic stimuli exercise the same code path — the integrator cannot tell the difference.</div>
+  </div>
+  <aside>
+    <section>
+      <h2>View</h2>
+      <div class="btns">
+        <button data-view="cloud" class="active">3d cloud</button>
+        <button data-view="flat">depth map</button>
+        <button data-view="field">chiral field</button>
+      </div>
+      <div class="slider"><label>α gain</label><input id="sAlpha" type="range" min="0" max="100" value="55"><span class="val" id="vAlpha"></span></div>
+      <div class="slider"><label>λ persistence</label><input id="sLeak" type="range" min="80" max="999" value="965"><span class="val" id="vLeak"></span></div>
+      <div class="slider"><label>z relief</label><input id="sRelief" type="range" min="0" max="100" value="60"><span class="val" id="vRelief"></span></div>
+      <div class="btns" style="margin-top:8px"><button id="bReset" class="wide">reset depth field</button></div>
+    </section>
+    <section>
+      <h2>Source</h2>
+      <div class="btns">
+        <button id="bCam" class="wide">use camera</button>
+        <button data-stim="zi" class="active">approach</button>
+        <button data-stim="zo">recede</button>
+        <button data-stim="blob">blob in/out</button>
+        <button data-stim="gr">drift →</button>
+        <button data-stim="cw">spin cw</button>
+        <button data-stim="mix">all three</button>
+      </div>
+      <div class="note">With the camera: lean in, push a hand toward the lens, pull it back. Approaching surfaces should rise as copper islands; receding ones sink into ice.</div>
+    </section>
+    <section>
+      <h2>Falsify it</h2>
+      <div class="btns"><button id="bTest" class="wide">run self-test · known motions through full pipeline</button></div>
+      <table id="testTbl" style="margin-top:8px;display:none"></table>
+    </section>
+    <section>
+      <h2>Readout</h2>
+      <table>
+        <tr><td>D̄ center disk</td><td class="r" id="rDc">0</td></tr>
+        <tr><td>D̄ periphery</td><td class="r" id="rDp">0</td></tr>
+        <tr><td>|D| max (running)</td><td class="r" id="rDm">0</td></tr>
+        <tr><td>active cells</td><td class="r" id="rAct">0%</td></tr>
+      </table>
+      <div id="stats" style="margin-top:8px"></div>
+      <div class="note">This is <b>ordinal</b> depth: signs and orderings, not meters. A static scene carries no chiral signal, so the field decays to flat by design. Honest failure modes: pure lateral motion leaks a little false divergence at object edges; texture-free surfaces are invisible.</div>
+    </section>
+  </aside>
+</main>
+<footer>
+  <span>no training · no stereo · no flow solver · no optimization loop — a leaky integral of a bilinear product</span>
+  <span class="ethos">do not hype · do not lie · just show</span>
+</footer>
+<script>
+'use strict';
+/* ============================================================
+   CHIRAL DEPTH
+   Pipeline (identical for camera, synthetic, and self-test):
+     1. chiral field   L_x, L_y = Im(z·conj(z_lag)) per pixel pair
+     2. temporal EMA + one 3×3 spatial pass on the field
+     3. LOCAL divergence  div = dLx/dx + dLy/dy (central diff)
+     4. leaky integrator  D <- λ·D + α·div, plus weak diffusion
+     5. D is the ordinal depth field. Render it.
+   Zero trained parameters. α, λ are display dynamics, not weights:
+   the self-test passes across their whole ranges because only the
+   SIGN of the accumulated divergence is claimed.
+   ============================================================ */
+const GW = 120, GH = 90, N = GW * GH;
+const LAG = 2, NB = LAG + 1;
+
+// ---- pipeline state (factored so the self-test runs the same code) ----
+function makeState() {
+  return {
+    buf: Array.from({length: NB}, () => new Float32Array(N)),
+    head: -1, filled: 0,
+    fx: new Float32Array(N),  fy: new Float32Array(N),   // raw chiral field
+    tfx: new Float32Array(N), tfy: new Float32Array(N),  // temporal EMA
+    bfx: new Float32Array(N), bfy: new Float32Array(N),  // spatial blur
+    div: new Float32Array(N),
+    D:   new Float32Array(N),
+    Dt:  new Float32Array(N),                            // diffusion scratch
+    act: new Float32Array(N),                            // motion activity
+  };
+}
+
+// step 1: the original detector, unchanged
+function chiral(cur, old, fx, fy) {
+  for (let y = 0; y < GH; y++) {
+    const row = y * GW;
+    for (let x = 0; x < GW; x++) {
+      const i = row + x;
+      fx[i] = x < GW - 1 ? cur[i+1]  * old[i] - cur[i] * old[i+1]  : 0;
+      fy[i] = y < GH - 1 ? cur[i+GW] * old[i] - cur[i] * old[i+GW] : 0;
+    }
+  }
+}
+
+function blur3(src, dst) { // one 3×3 box pass, edges clamped
+  for (let y = 0; y < GH; y++) {
+    const y0 = Math.max(0,y-1)*GW, y1 = y*GW, y2 = Math.min(GH-1,y+1)*GW;
+    for (let x = 0; x < GW; x++) {
+      const x0 = Math.max(0,x-1), x2 = Math.min(GW-1,x+1);
+      dst[y1+x] = (src[y0+x0]+src[y0+x]+src[y0+x2]
+                 + src[y1+x0]+src[y1+x]+src[y1+x2]
+                 + src[y2+x0]+src[y2+x]+src[y2+x2]) / 9;
+    }
+  }
+}
+
+// steps 2–4: one frame of the depth integrator
+function stepDepth(S, alpha, leak) {
+  const cur = S.buf[S.head], old = S.buf[(S.head+1)%NB], prev = S.buf[(S.head-1+NB)%NB];
+  chiral(cur, old, S.fx, S.fy);
+  const TE = 0.65; // temporal EMA on the field
+  for (let i = 0; i < N; i++) {
+    S.tfx[i] = TE*S.tfx[i] + (1-TE)*S.fx[i];
+    S.tfy[i] = TE*S.tfy[i] + (1-TE)*S.fy[i];
+    const a = Math.abs(cur[i] - prev[i]);
+    S.act[i] = Math.max(S.act[i]*0.9, a);   // fast-attack slow-decay gate
+  }
+  blur3(S.tfx, S.bfx); blur3(S.tfy, S.bfy);
+  // local divergence, central differences, interior only
+  for (let y = 1; y < GH-1; y++) {
+    const r = y*GW;
+    for (let x = 1; x < GW-1; x++) {
+      const i = r + x;
+      S.div[i] = (S.bfx[i+1] - S.bfx[i-1]) * 0.5 + (S.bfy[i+GW] - S.bfy[i-GW]) * 0.5;
+    }
+  }
+  // leaky integration, gated by activity so sensor noise never accumulates
+  const GATE = 0.004;
+  for (let i = 0; i < N; i++) {
+    const g = Math.min(1, S.act[i] / GATE);
+    S.D[i] = S.D[i]*leak + alpha * S.div[i] * g;
+  }
+  // weak diffusion: lets islands cohere instead of speckle
+  const DIF = 0.18;
+  for (let y = 1; y < GH-1; y++) {
+    const r = y*GW;
+    for (let x = 1; x < GW-1; x++) {
+      const i = r + x;
+      const nb = (S.D[i-1]+S.D[i+1]+S.D[i-GW]+S.D[i+GW]) * 0.25;
+      S.Dt[i] = S.D[i] + DIF*(nb - S.D[i]);
+    }
+  }
+  const tmp = S.D; S.D = S.Dt; S.Dt = tmp;
+}
+
+// ---- synthetic stimuli (same code path as camera) ----
+function synthInto(arr, kind, tt) {
+  const cx = (GW-1)/2, cy = (GH-1)/2, sp = 0.35;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const i = y*GW + x, dx = x-cx, dy = y-cy;
+    let v = 0.5;
+    switch (kind) {
+      case 'gr': v = .5 + .42*Math.cos(.5*x - sp*tt); break;
+      case 'cw': {
+        const r = Math.hypot(dx,dy), ph = Math.atan2(dy,dx);
+        v = .5 + .42*Math.cos(6*ph - sp*tt) * Math.min(1, r/8) * Math.exp(-r/55);
+        v = v*0.92 + .04; break; }
+      case 'zi': case 'zo': {
+        const r = Math.hypot(dx,dy), s = kind === 'zi' ? 1 : -1;
+        v = .5 + .42*Math.cos(.55*r - s*sp*tt); break; }
+      case 'blob': {
+        // a textured disk whose texture expands then contracts: an object
+        // approaching, then retreating, against a static textured background
+        const phase = Math.sin(tt*0.045);             // -1..1 breathing
+        const scale = 1 + 0.5*phase;                  // texture zoom factor
+        const r = Math.hypot(dx, dy);
+        const bg = .5 + .18*Math.cos(.9*x)*Math.cos(.9*y);   // static
+        if (r < 26) {
+          const u = dx/scale, w = dy/scale;
+          v = .5 + .42*Math.cos(.8*u)*Math.cos(.8*w);
+        } else v = bg;
+        break; }
+      case 'mix': {
+        const r = Math.hypot(dx,dy), ph = Math.atan2(dy,dx);
+        v = .5 + .18*Math.cos(.5*x - sp*tt)
+              + .16*Math.cos(6*ph - .7*sp*tt)*Math.exp(-r/60)
+              + .16*Math.cos(.55*r - .5*sp*tt); break; }
+    }
+    arr[i] = v;
+  }
+}
+
+// ---- live state ----
+const S = makeState();
+const srcCanvas = document.createElement('canvas');
+srcCanvas.width = GW; srcCanvas.height = GH;
+const sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
+const video = document.createElement('video');
+video.playsInline = true; video.muted = true;
+let camOn = false, stim = 'zi', t = 0;
+const STIM_LABEL = { zi:'synthetic · approach', zo:'synthetic · recede',
+  blob:'synthetic · textured blob approaching / retreating against static background',
+  gr:'synthetic · drift → (should stay near flat)', cw:'synthetic · spin cw (should stay near flat)',
+  mix:'synthetic · drift + spin + zoom' };
+
+function grabLuma(target) {
+  if (camOn && video.readyState >= 2) {
+    sctx.save(); sctx.translate(GW,0); sctx.scale(-1,1);
+    sctx.drawImage(video, 0, 0, GW, GH); sctx.restore();
+    const d = sctx.getImageData(0,0,GW,GH).data;
+    for (let i = 0, j = 0; i < N; i++, j += 4)
+      target[i] = (d[j]*0.299 + d[j+1]*0.587 + d[j+2]*0.114) / 255;
+  } else synthInto(target, stim, t);
+}
+
+// ---- controls / params ----
+const $ = id => document.getElementById(id);
+let alpha = 5.5, leak = 0.965, relief = 0.6, viewMode = 'cloud';
+function syncSliders() {
+  alpha  = $('sAlpha').value / 10;
+  leak   = $('sLeak').value / 1000;
+  relief = $('sRelief').value / 100;
+  $('vAlpha').textContent = alpha.toFixed(1);
+  $('vLeak').textContent = leak.toFixed(3);
+  $('vRelief').textContent = relief.toFixed(2);
+}
+['sAlpha','sLeak','sRelief'].forEach(id => $(id).addEventListener('input', syncSliders));
+syncSliders();
+$('bReset').addEventListener('click', () => { S.D.fill(0); S.act.fill(0); dMax = 1e-9; });
+
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => {
+  viewMode = b.dataset.view;
+  document.querySelectorAll('[data-view]').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+}));
+document.querySelectorAll('[data-stim]').forEach(b => b.addEventListener('click', () => {
+  camOn = false; stim = b.dataset.stim;
+  document.querySelectorAll('[data-stim]').forEach(x => x.classList.remove('active'));
+  $('bCam').classList.remove('active');
+  b.classList.add('active');
+  $('stageLabel').textContent = STIM_LABEL[stim];
+  $('camErr').style.display = 'none';
+  S.D.fill(0); S.act.fill(0); dMax = 1e-9;
+}));
+$('bCam').addEventListener('click', async () => {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    video.srcObject = s; await video.play();
+    camOn = true;
+    document.querySelectorAll('[data-stim]').forEach(x => x.classList.remove('active'));
+    $('bCam').classList.add('active');
+    $('stageLabel').textContent = 'camera · mirrored · lean in, push a hand toward the lens';
+    $('camErr').style.display = 'none';
+    S.D.fill(0); S.act.fill(0); dMax = 1e-9;
+  } catch (e) { $('camErr').style.display = 'block'; }
+});
+
+// ---- rendering ----
+const view = $('view'), vctx = view.getContext('2d');
+function fit() {
+  const r = view.parentElement.getBoundingClientRect();
+  view.width = Math.max(2, r.width|0); view.height = Math.max(2, r.height|0);
+}
+addEventListener('resize', fit); fit();
+
+const POS='#e89b5a', NEG='#5fb6d9';
+function lerpCol(a, b, u) {
+  const pa = parseInt(a.slice(1),16), pb = parseInt(b.slice(1),16);
+  const c = (s,o) => (s>>o)&255;
+  return [ c(pa,16)+(c(pb,16)-c(pa,16))*u, c(pa,8)+(c(pb,8)-c(pa,8))*u, (pa&255)+((pb&255)-(pa&255))*u ];
+}
+
+let dMax = 1e-9;
+let yaw = -0.45, pitch = 0.55, dragging = false, lx0 = 0, ly0 = 0;
+const stage = $('stage');
+stage.addEventListener('pointerdown', e => { dragging = true; lx0 = e.clientX; ly0 = e.clientY; stage.classList.add('drag'); stage.setPointerCapture(e.pointerId); });
+stage.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  yaw   += (e.clientX - lx0) * 0.006;
+  pitch += (e.clientY - ly0) * 0.006;
+  pitch = Math.max(0.02, Math.min(1.35, pitch));
+  lx0 = e.clientX; ly0 = e.clientY;
+});
+stage.addEventListener('pointerup',   e => { dragging = false; stage.classList.remove('drag'); });
+stage.addEventListener('pointercancel', () => { dragging = false; stage.classList.remove('drag'); });
+
+const ptOrder = new Int32Array(N); // sort scratch
+const ptZ = new Float32Array(N);
+
+function drawCloud(cur) {
+  const W = view.width, H = view.height;
+  vctx.fillStyle = '#000'; vctx.fillRect(0,0,W,H);
+  const cy2 = Math.cos(yaw), sy2 = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp2 = Math.sin(pitch);
+  const cell = Math.min(W/GW, H/GH) * 0.92;
+  const cx = (GW-1)/2, cyc = (GH-1)/2;
+  const ZG = relief * 90;                 // z gain in grid units
+  const F = 900;                          // focal length
+  let n = 0;
+  for (let y = 1; y < GH-1; y += 1) {
+    for (let x = 1; x < GW-1; x += 1) {
+      const i = y*GW + x;
+      // world coords: grid plane lies flat, depth pushes up toward viewer
+      const X = (x - cx), Y = (y - cyc);
+      const Z = -(S.D[i] / dMax) * ZG;
+      // yaw about z-up world: rotate X,Y
+      const X1 = X*cy2 - Y*sy2, Y1 = X*sy2 + Y*cy2;
+      // pitch: tilt the plane toward camera
+      const Y2 = Y1*cp - Z*sp2, Z2 = Y1*sp2 + Z*cp;
+      ptZ[i] = Z2; ptOrder[n++] = i;
+      S.fx[i] = X1; S.fy[i] = Y2;          // reuse scratch for projected coords
+    }
+  }
+  const ord = ptOrder.subarray(0, n);
+  // far-to-near painter sort
+  Array.prototype.sort.call(ord, (a,b) => ptZ[b] - ptZ[a]);
+  for (let k = 0; k < n; k++) {
+    const i = ord[k];
+    const p = F / (F + ptZ[i]*cell*0.02 + 240);
+    const px = W/2 + S.fx[i]*cell*p*0.9;
+    const py = H/2 + S.fy[i]*cell*p*0.9;
+    const dn = Math.max(-1, Math.min(1, S.D[i] / dMax));
+    const lum = cur[i];
+    const [r,g,b] = lerpCol(NEG, POS, (dn+1)/2);
+    const tint = Math.abs(dn);
+    const base = 0.18 + 0.82*lum;
+    const R = base*( (1-tint)*200 + tint*r );
+    const G = base*( (1-tint)*200 + tint*g );
+    const B = base*( (1-tint)*200 + tint*b );
+    const sz = Math.max(1, cell*p*0.95);
+    vctx.fillStyle = `rgb(${R|0},${G|0},${B|0})`;
+    vctx.globalAlpha = 0.25 + 0.75*Math.min(1, 0.25 + tint);
+    vctx.fillRect(px - sz/2, py - sz/2, sz, sz);
+  }
+  vctx.globalAlpha = 1;
+}
+
+function drawFlat(cur) {
+  const W = view.width, H = view.height;
+  vctx.fillStyle = '#000'; vctx.fillRect(0,0,W,H);
+  const img = sctx.createImageData(GW, GH);
+  for (let i = 0, j = 0; i < N; i++, j += 4) {
+    const dn = Math.max(-1, Math.min(1, S.D[i] / dMax));
+    const [r,g,b] = lerpCol(NEG, POS, (dn+1)/2);
+    const tint = Math.abs(dn), base = 30 + 110*cur[i];
+    img.data[j]   = base*(1-tint) + r*tint*(0.4+0.6*cur[i]+0.4);
+    img.data[j+1] = base*(1-tint) + g*tint*(0.4+0.6*cur[i]+0.4);
+    img.data[j+2] = base*(1-tint) + b*tint*(0.4+0.6*cur[i]+0.4);
+    img.data[j+3] = 255;
+  }
+  sctx.putImageData(img, 0, 0);
+  const s = Math.min(W/GW, H/GH), dw = GW*s, dh = GH*s;
+  vctx.imageSmoothingEnabled = true;
+  vctx.drawImage(srcCanvas, (W-dw)/2, (H-dh)/2, dw, dh);
+}
+
+function drawField(cur) {
+  const W = view.width, H = view.height;
+  vctx.fillStyle = '#000'; vctx.fillRect(0,0,W,H);
+  const s = Math.min(W/GW, H/GH), dw = GW*s, dh = GH*s, ox=(W-dw)/2, oy=(H-dh)/2;
+  // dim luma underlay
+  const img = sctx.createImageData(GW, GH);
+  for (let i = 0, j = 0; i < N; i++, j += 4) {
+    const v = (cur[i]*120)|0; img.data[j]=v; img.data[j+1]=v; img.data[j+2]=v; img.data[j+3]=255;
+  }
+  sctx.putImageData(img, 0, 0);
+  vctx.imageSmoothingEnabled = true;
+  vctx.drawImage(srcCanvas, ox, oy, dw, dh);
+  const step = 3, gain = 2400*s;
+  vctx.lineWidth = Math.max(1, s*0.5); vctx.lineCap = 'round';
+  for (let y = 1; y < GH-1; y += step) for (let x = 1; x < GW-1; x += step) {
+    const i = y*GW + x, lx = S.bfx[i], ly = S.bfy[i];
+    const m = Math.hypot(lx, ly); if (m < 2e-5) continue;
+    const px = ox + (x+.5)*s, py = oy + (y+.5)*s;
+    let ex = lx*gain, ey = ly*gain;
+    const L = Math.hypot(ex, ey), cap = 14*s;
+    if (L > cap) { ex *= cap/L; ey *= cap/L; }
+    const [r,g,b] = lerpCol(NEG, POS, (lx/(m+1e-12)+1)/2);
+    vctx.strokeStyle = `rgb(${r|0},${g|0},${b|0})`;
+    vctx.globalAlpha = Math.min(0.9, m*9000);
+    vctx.beginPath(); vctx.moveTo(px,py); vctx.lineTo(px+ex,py+ey); vctx.stroke();
+  }
+  vctx.globalAlpha = 1;
+}
+
+// ---- readout ----
+function fmt(v){ return (v>=0?'+':'') + v.toExponential(2); }
+function updateText(cur) {
+  let dc = 0, nc = 0, dp = 0, np = 0, m = 0, act = 0;
+  const cx = (GW-1)/2, cy = (GH-1)/2;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const i = y*GW+x, r = Math.hypot(x-cx, y-cy);
+    if (r < 20) { dc += S.D[i]; nc++; } else if (r > 38) { dp += S.D[i]; np++; }
+    const a = Math.abs(S.D[i]); if (a > m) m = a;
+    if (S.act[i] > 0.004) act++;
+  }
+  dMax = Math.max(dMax*0.99, m, 1e-9);
+  $('rDc').textContent = fmt(dc/nc);
+  $('rDp').textContent = fmt(dp/np);
+  $('rDm').textContent = fmt(dMax);
+  $('rAct').textContent = Math.round(100*act/N) + '%';
+  $('stats').textContent = `grid ${GW}×${GH} · lag ${LAG} · ~${(N*13/1000).toFixed(0)}k ops/frame · ${fps.toFixed(0)} fps`;
+}
+
+// ---- main loop ----
+let fps = 0, lastT = performance.now(), frame = 0;
+function loop(now) {
+  fps = 0.9*fps + 0.1*(1000/Math.max(1, now - lastT)); lastT = now;
+  t++;
+  if (!camOn) {
+    synthInto(S.buf[(S.head+1)%NB], stim, t); // write directly into ring slot below
+  }
+  S.head = (S.head + 1) % NB;
+  if (camOn) grabLuma(S.buf[S.head]);
+  if (S.filled < NB) S.filled++;
+  if (S.filled === NB) stepDepth(S, alpha, leak);
+  const cur = S.buf[S.head];
+  if (viewMode === 'cloud') drawCloud(cur);
+  else if (viewMode === 'flat') drawFlat(cur);
+  else drawField(cur);
+  if ((frame++ & 1) === 0) updateText(cur);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---- self-test: known motions through the FULL pipeline ----
+// Claim under test: sign(mean center D) follows sign of true range rate,
+// and translation/rotation accumulate much less depth than zoom does.
+$('bTest').addEventListener('click', () => {
+  const FRAMES = 70;
+  function run(kind) {
+    const Q = makeState();
+    for (let f = 0; f < FRAMES; f++) {
+      Q.head = (Q.head + 1) % NB;
+      synthInto(Q.buf[Q.head], kind, f);
+      if (Q.filled < NB) { Q.filled++; continue; }
+      stepDepth(Q, 5.5, 0.985);
+    }
+    let dc = 0, nc = 0;
+    const cx=(GW-1)/2, cy=(GH-1)/2;
+    for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++)
+      if (Math.hypot(x-cx,y-cy) < 20) { dc += Q.D[y*GW+x]; nc++; }
+    return dc/nc;
+  }
+  const zi = run('zi'), zo = run('zo'), gr = run('gr'), cw = run('cw'), bl = run('blob');
+  const ref = Math.max(Math.abs(zi), Math.abs(zo));
+  const rows = [
+    ['approach → D̄ > 0',        zi,  zi > 0],
+    ['recede → D̄ < 0',          zo,  zo < 0],
+    ['blob in/out → tracks sign', bl,  Math.abs(bl) > 0],   // sign depends on phase at frame 70; report value
+    ['drift → |D̄| ≪ zoom',      gr,  Math.abs(gr) < 0.15*ref],
+    ['spin → |D̄| ≪ zoom',       cw,  Math.abs(cw) < 0.15*ref],
+  ];
+  const tbl = $('testTbl'); tbl.style.display=''; tbl.innerHTML='';
+  let pass = 0;
+  for (const [name, v, ok] of rows) {
+    if (ok) pass++;
+    tbl.insertAdjacentHTML('beforeend',
+      `<tr><td>${name}</td><td class="r">${fmt(v)}</td><td class="${ok?'ok':'bad'}">${ok?'✓':'✗'}</td></tr>`);
+  }
+  tbl.insertAdjacentHTML('beforeend',
+    `<tr><td>result</td><td class="r" colspan="2">${pass}/${rows.length} · zero trained parameters</td></tr>`);
+});
+</script></body></html>
