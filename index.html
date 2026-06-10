@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chiral Eye — trainless motion decomposition</title>
+<style>
+  :root{
+    --bg:#0c1014; --panel:#121821; --panel2:#0f141c; --line:#1e2832;
+    --ink:#e8edf2; --muted:#6b7a8c; --faint:#3a4754;
+    --pos:#e89b5a;  /* copper  : right / clockwise / approaching */
+    --neg:#5fb6d9;  /* ice     : left / counter-clockwise / receding */
+    --ok:#7fc97f; --bad:#e06c6c;
+    --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
+    --sans:'Avenir Next','Segoe UI',system-ui,-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);display:flex;flex-direction:column;overflow:hidden}
+
+  header{display:flex;align-items:baseline;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:15px;font-weight:700;letter-spacing:.32em;text-transform:uppercase}
+  header h1 .ch{color:var(--pos)} header h1 .ir{color:var(--neg)}
+  header .formula{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  header .tag{margin-left:auto;font-size:11px;color:var(--faint);letter-spacing:.08em}
+
+  main{flex:1;display:flex;min-height:0}
+  #stage{flex:1;position:relative;background:#000;min-width:0}
+  #view{position:absolute;inset:0;width:100%;height:100%}
+  #stageLabel{position:absolute;left:12px;top:10px;font-family:var(--mono);font-size:11px;color:var(--muted);
+    background:rgba(12,16,20,.55);padding:3px 8px;border:1px solid var(--line)}
+  #camErr{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;max-width:340px;
+    font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);padding:12px 14px;line-height:1.5}
+
+  aside{width:330px;border-left:1px solid var(--line);background:var(--panel2);overflow-y:auto;flex-shrink:0}
+  section{padding:12px 14px;border-bottom:1px solid var(--line)}
+  h2{font-size:10px;font-weight:600;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+
+  .gauges{display:flex;gap:8px;justify-content:space-between}
+  .gauge{flex:1;text-align:center}
+  .gauge canvas{width:100%;max-width:96px;aspect-ratio:1;display:block;margin:0 auto}
+  .gauge .gl{font-size:9px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-top:4px}
+  .gauge .gv{font-family:var(--mono);font-size:11px;margin-top:2px;min-height:14px}
+
+  .costrow{display:flex;align-items:baseline;gap:10px}
+  #costPct{font-family:var(--mono);font-size:30px;font-weight:600;min-width:96px}
+  .costnote{font-size:11px;color:var(--muted);line-height:1.4}
+  #spark{width:100%;height:34px;display:block;margin-top:8px}
+
+  .btns{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+  button{font-family:var(--mono);font-size:11px;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);padding:7px 4px;cursor:pointer;letter-spacing:.04em}
+  button:hover{border-color:var(--muted)}
+  button:focus-visible{outline:2px solid var(--pos);outline-offset:1px}
+  button.active{border-color:var(--pos);color:var(--pos)}
+  button.wide{grid-column:1 / -1}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px}
+  td{padding:3px 4px;border-bottom:1px solid var(--line);color:var(--muted)}
+  td.r{text-align:right;color:var(--ink)}
+  td.ok{color:var(--ok)} td.bad{color:var(--bad)}
+
+  #stats{font-family:var(--mono);font-size:10px;color:var(--faint);line-height:1.7}
+  footer{padding:8px 18px;border-top:1px solid var(--line);font-size:10px;color:var(--faint);
+    letter-spacing:.06em;display:flex;gap:16px;flex-wrap:wrap}
+  footer .ethos{margin-left:auto;color:var(--muted)}
+
+  @media (max-width:760px){
+    body{overflow:auto}
+    main{flex-direction:column}
+    #stage{min-height:46vh}
+    aside{width:100%;border-left:none;border-top:1px solid var(--line)}
+  }
+  @media (prefers-reduced-motion:reduce){ .gauge canvas{filter:none} }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="ch">Chiral</span> <span class="ir">Eye</span></h1>
+  <span class="formula">L = Im( z · z̄<sub>lag</sub> ) &nbsp;·&nbsp; z = I(x) + i·I(x+1)</span>
+  <span class="tag">PerceptionLab · zero parameters · one pass per frame</span>
+</header>
+
+<main>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="stageLabel">synthetic · spin cw</div>
+    <div id="camErr">Camera unavailable in this context. The synthetic stimuli below exercise the same code path — the detector cannot tell the difference.</div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Decomposition</h2>
+      <div class="gauges">
+        <div class="gauge"><canvas id="gDrift" width="192" height="192"></canvas>
+          <div class="gl">Drift</div><div class="gv" id="vDrift">—</div></div>
+        <div class="gauge"><canvas id="gSpin" width="192" height="192"></canvas>
+          <div class="gl">Spin</div><div class="gv" id="vSpin">—</div></div>
+        <div class="gauge"><canvas id="gZoom" width="192" height="192"></canvas>
+          <div class="gl">Range</div><div class="gv" id="vZoom">—</div></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Delta-code economy</h2>
+      <div class="costrow">
+        <div id="costPct">0%</div>
+        <div class="costnote">of recent peak event rate.<br>Hold still — the eye goes silent.</div>
+      </div>
+      <canvas id="spark"></canvas>
+    </section>
+
+    <section>
+      <h2>Source</h2>
+      <div class="btns">
+        <button id="bCam" class="wide">use camera</button>
+        <button data-stim="gr">drift →</button>
+        <button data-stim="gl">drift ←</button>
+        <button data-stim="gd">drift ↓</button>
+        <button data-stim="gu">drift ↑</button>
+        <button data-stim="cw" class="active">spin cw</button>
+        <button data-stim="ccw">spin ccw</button>
+        <button data-stim="zi">approach</button>
+        <button data-stim="zo">recede</button>
+        <button data-stim="mix">all three</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Falsify it</h2>
+      <div class="btns"><button id="bTest" class="wide">run self-test · 8 known motions</button></div>
+      <table id="testTbl" style="margin-top:8px;display:none"></table>
+    </section>
+
+    <section>
+      <h2>Readout</h2>
+      <table>
+        <tr><td>net x (L→R +)</td><td class="r" id="rX">0</td></tr>
+        <tr><td>net y (U→D +)</td><td class="r" id="rY">0</td></tr>
+        <tr><td>curl (CW +)</td><td class="r" id="rC">0</td></tr>
+        <tr><td>div (approach +)</td><td class="r" id="rD">0</td></tr>
+      </table>
+      <div id="stats" style="margin-top:8px"></div>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <span>no training · no iteration · no flow solver — one bilinear product per pixel pair</span>
+  <span class="ethos">do not hype · do not lie · just show</span>
+</footer>
+
+<script>
+'use strict';
+/* ============================================================
+   CHIRAL EYE
+   The whole detector is the function compute() below: for each
+   pixel, pair it with its neighbour into a complex number
+   z = I(x) + i·I(x+1), multiply by the conjugate of the same
+   pixel LAG frames ago, and keep the imaginary part. The sign
+   is the direction. Project the resulting vector field onto
+   three rigid flows and you get drift, spin and zoom — with
+   zero trained parameters and one pass per frame.
+   ============================================================ */
+
+const GW = 120, GH = 90;        // detector grid
+const LAG = 2;                  // frames of delay in the conjugate product
+const SMOOTH = 0.72;            // EMA on the readouts
+const N = GW * GH;
+
+// ring buffer of luma grids
+const NB = LAG + 1;
+const buf = Array.from({length: NB}, () => new Float32Array(N));
+let head = -1, filled = 0;
+
+// per-cell field
+const fx = new Float32Array(N), fy = new Float32Array(N);
+
+// ---- the detector ----------------------------------------------------
+function compute(cur, old, outFx, outFy) {
+  let nx = 0, ny = 0, curl = 0, div = 0;
+  const cx = (GW - 1) / 2, cy = (GH - 1) / 2;
+  for (let y = 0; y < GH; y++) {
+    const row = y * GW, dy = (y - cy) / cy;
+    for (let x = 0; x < GW; x++) {
+      const i = row + x, dx = (x - cx) / cx;
+      // Im( z_now · conj(z_lag) )  with z = I(p) + i·I(p+1)
+      const lx = x < GW - 1 ? cur[i+1]  * old[i] - cur[i] * old[i+1]  : 0;
+      const ly = y < GH - 1 ? cur[i+GW] * old[i] - cur[i] * old[i+GW] : 0;
+      if (outFx) { outFx[i] = lx; outFy[i] = ly; }
+      nx += lx; ny += ly;
+      curl += dx * ly - dy * lx;   // + = clockwise on screen
+      div  += dx * lx + dy * ly;   // + = expanding (approaching)
+    }
+  }
+  return { nx: nx/N, ny: ny/N, curl: curl/N, div: div/N };
+}
+// ----------------------------------------------------------------------
+
+// ---- sources ----
+const srcCanvas = document.createElement('canvas');
+srcCanvas.width = GW; srcCanvas.height = GH;
+const sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
+
+const video = document.createElement('video');
+video.playsInline = true; video.muted = true;
+let camOn = false;
+let stim = 'cw';
+let t = 0;
+
+const STIM_LABEL = { gr:'synthetic · drift →', gl:'synthetic · drift ←',
+  gd:'synthetic · drift ↓', gu:'synthetic · drift ↑', cw:'synthetic · spin cw',
+  ccw:'synthetic · spin ccw', zi:'synthetic · approach', zo:'synthetic · recede',
+  mix:'synthetic · drift + spin + zoom' };
+
+function synthInto(arr, kind, tt) {
+  const cx = (GW-1)/2, cy = (GH-1)/2, sp = 0.35;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+    const i = y*GW + x, dx = x-cx, dy = y-cy;
+    let v = 0.5;
+    switch (kind) {
+      case 'gr': v = .5 + .42*Math.cos(.5*x - sp*tt); break;
+      case 'gl': v = .5 + .42*Math.cos(.5*x + sp*tt); break;
+      case 'gd': v = .5 + .42*Math.cos(.5*y - sp*tt); break;
+      case 'gu': v = .5 + .42*Math.cos(.5*y + sp*tt); break;
+      case 'cw': case 'ccw': {
+        const r = Math.hypot(dx,dy), ph = Math.atan2(dy,dx);
+        const s = kind === 'cw' ? 1 : -1;
+        v = .5 + .42*Math.cos(6*ph - s*sp*tt) * Math.min(1, r/8) * Math.exp(-r/55);
+        v = v*0.92 + .04; break; }
+      case 'zi': case 'zo': {
+        const r = Math.hypot(dx,dy), s = kind === 'zi' ? 1 : -1;
+        v = .5 + .42*Math.cos(.55*r - s*sp*tt); break; }
+      case 'mix': {
+        const r = Math.hypot(dx,dy), ph = Math.atan2(dy,dx);
+        v = .5 + .18*Math.cos(.5*x - sp*tt)
+              + .16*Math.cos(6*ph - .7*sp*tt)*Math.exp(-r/60)
+              + .16*Math.cos(.55*r - .5*sp*tt); break; }
+    }
+    arr[i] = v;
+  }
+}
+
+const lumaTmp = new Float32Array(N);
+function grabLuma(target) {
+  if (camOn && video.readyState >= 2) {
+    sctx.save();
+    sctx.translate(GW, 0); sctx.scale(-1, 1);        // mirror for natural interaction
+    sctx.drawImage(video, 0, 0, GW, GH);
+    sctx.restore();
+    const d = sctx.getImageData(0, 0, GW, GH).data;
+    for (let i = 0, j = 0; i < N; i++, j += 4)
+      target[i] = (d[j]*0.299 + d[j+1]*0.587 + d[j+2]*0.114) / 255;
+  } else {
+    synthInto(target, stim, t);
+  }
+}
+
+// ---- smoothed state ----
+let sx=0, sy=0, sc=0, sd=0, evRate=0, basePeak=1e-9;
+let spinPhase=0, zoomPhase=0;
+const driftTrail = [];
+const sparkHist = new Array(140).fill(0);
+let fps=0, lastT=performance.now();
+
+// ---- drawing ----
+const view = document.getElementById('view');
+const vctx = view.getContext('2d');
+function fit() {
+  const r = view.parentElement.getBoundingClientRect();
+  view.width = Math.max(2, r.width|0); view.height = Math.max(2, r.height|0);
+}
+addEventListener('resize', fit); fit();
+
+const POS='#e89b5a', NEG='#5fb6d9';
+function mixCol(a, b, u) { // hex lerp
+  const pa=parseInt(a.slice(1),16), pb=parseInt(b.slice(1),16);
+  const c=(s,o)=> (s>>o)&255;
+  const r=c(pa,16)+(c(pb,16)-c(pa,16))*u, g=c(pa,8)+(c(pb,8)-c(pa,8))*u, bl=(pa&255)+((pb&255)-(pa&255))*u;
+  return `rgb(${r|0},${g|0},${bl|0})`;
+}
+
+function drawStage() {
+  const W = view.width, H = view.height;
+  vctx.fillStyle = '#000'; vctx.fillRect(0,0,W,H);
+  // fit source preserving aspect
+  const s = Math.min(W/GW, H/GH), dw = GW*s, dh = GH*s, ox = (W-dw)/2, oy = (H-dh)/2;
+  vctx.imageSmoothingEnabled = true;
+  vctx.globalAlpha = 0.5;
+  vctx.drawImage(srcCanvas, ox, oy, dw, dh);
+  vctx.globalAlpha = 1;
+
+  // field streaks
+  const step = 3, gain = 2400 * s;
+  vctx.lineWidth = Math.max(1, s*0.5);
+  vctx.lineCap = 'round';
+  for (let y = 1; y < GH-1; y += step) for (let x = 1; x < GW-1; x += step) {
+    const i = y*GW + x, lx = fx[i], ly = fy[i];
+    const m = Math.hypot(lx, ly);
+    if (m < 2e-5) continue;
+    const px = ox + (x+.5)*s, py = oy + (y+.5)*s;
+    let ex = lx*gain, ey = ly*gain;
+    const L = Math.hypot(ex, ey), cap = 14*s;
+    if (L > cap) { ex *= cap/L; ey *= cap/L; }
+    vctx.strokeStyle = mixCol(NEG, POS, (lx/(m+1e-12)+1)/2);
+    vctx.globalAlpha = Math.min(0.9, m*9000);
+    vctx.beginPath(); vctx.moveTo(px, py); vctx.lineTo(px+ex, py+ey); vctx.stroke();
+  }
+  vctx.globalAlpha = 1;
+}
+
+function ring(ctx, R) { const c = ctx.canvas.width/2;
+  ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  ctx.strokeStyle = '#1e2832'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(c, c, R, 0, Math.PI*2); ctx.stroke(); return c;
+}
+
+const gD = document.getElementById('gDrift').getContext('2d');
+const gS = document.getElementById('gSpin').getContext('2d');
+const gZ = document.getElementById('gZoom').getContext('2d');
+
+function drawGauges() {
+  // DRIFT — arrow + trail
+  let c = ring(gD, 82);
+  const k = 5e5;
+  let ax = Math.max(-70, Math.min(70, sx*k)), ay = Math.max(-70, Math.min(70, sy*k));
+  driftTrail.push([ax, ay]); if (driftTrail.length > 40) driftTrail.shift();
+  gD.strokeStyle = '#3a4754'; gD.lineWidth = 1.5; gD.beginPath();
+  driftTrail.forEach((p, i) => i ? gD.lineTo(c+p[0], c+p[1]) : gD.moveTo(c+p[0], c+p[1]));
+  gD.stroke();
+  const col = sx >= 0 ? POS : NEG;
+  gD.strokeStyle = col; gD.fillStyle = col; gD.lineWidth = 4; gD.lineCap='round';
+  gD.beginPath(); gD.moveTo(c, c); gD.lineTo(c+ax, c+ay); gD.stroke();
+  gD.beginPath(); gD.arc(c, c, 4, 0, Math.PI*2); gD.fill();
+
+  // SPIN — chevron ring rotating with measured curl
+  c = ring(gS, 82);
+  spinPhase += sc * 1.6e5;
+  const scol = sc >= 0 ? POS : NEG, n = 9;
+  gS.strokeStyle = scol; gS.lineWidth = 3.5; gS.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const a = spinPhase + i * 2*Math.PI/n, r1 = 60, sweep = 0.34;
+    gS.beginPath(); gS.arc(c, c, r1, a, a+sweep); gS.stroke();
+    const tipA = sc >= 0 ? a+sweep : a;
+    const tx = c + r1*Math.cos(tipA), ty = c + r1*Math.sin(tipA);
+    const ta = tipA + (sc >= 0 ? Math.PI/2 : -Math.PI/2);
+    gS.beginPath(); gS.moveTo(tx, ty);
+    gS.lineTo(tx + 9*Math.cos(ta-2.5), ty + 9*Math.sin(ta-2.5));
+    gS.moveTo(tx, ty);
+    gS.lineTo(tx + 9*Math.cos(ta+2.5), ty + 9*Math.sin(ta+2.5));
+    gS.stroke();
+  }
+
+  // RANGE — breathing rings driven by divergence
+  c = ring(gZ, 82);
+  zoomPhase = (zoomPhase + sd * 2.2e5) % 1; if (zoomPhase < 0) zoomPhase += 1;
+  const zcol = sd >= 0 ? POS : NEG;
+  gZ.strokeStyle = zcol; gZ.lineWidth = 2.5;
+  for (let i = 0; i < 3; i++) {
+    const u = (zoomPhase + i/3) % 1, r = 8 + u*68;
+    gZ.globalAlpha = 1 - u;
+    gZ.beginPath(); gZ.arc(c, c, r, 0, Math.PI*2); gZ.stroke();
+  }
+  gZ.globalAlpha = 1;
+}
+
+const spark = document.getElementById('spark');
+function drawSpark() {
+  const r = spark.getBoundingClientRect();
+  spark.width = r.width; spark.height = r.height;
+  const x2 = spark.getContext('2d');
+  x2.strokeStyle = '#5fb6d9'; x2.lineWidth = 1.5; x2.beginPath();
+  const n = sparkHist.length;
+  for (let i = 0; i < n; i++) {
+    const x = i/(n-1) * spark.width, y = spark.height - 2 - sparkHist[i]*(spark.height-4);
+    i ? x2.lineTo(x, y) : x2.moveTo(x, y);
+  }
+  x2.stroke();
+}
+
+// ---- labels ----
+const $ = id => document.getElementById(id);
+function fmt(v){ const s = v >= 0 ? '+' : ''; return s + v.toExponential(2); }
+function updateText() {
+  const TH = 4e-6;
+  $('vDrift').textContent =
+    (Math.abs(sx)<TH && Math.abs(sy)<TH) ? 'still' :
+    ((sx>TH?'right':sx<-TH?'left':'') + ' ' + (sy>TH?'down':sy<-TH?'up':'')).trim();
+  $('vSpin').textContent = Math.abs(sc)<TH ? '—' : (sc>0?'clockwise':'counter-cw');
+  $('vSpin').style.color = Math.abs(sc)<TH ? '' : (sc>0?POS:NEG);
+  $('vZoom').textContent = Math.abs(sd)<TH ? '—' : (sd>0?'approaching':'receding');
+  $('vZoom').style.color = Math.abs(sd)<TH ? '' : (sd>0?POS:NEG);
+  $('vDrift').style.color = (Math.abs(sx)<TH&&Math.abs(sy)<TH) ? '' : (sx>=0?POS:NEG);
+  $('rX').textContent = fmt(sx); $('rY').textContent = fmt(sy);
+  $('rC').textContent = fmt(sc); $('rD').textContent = fmt(sd);
+  const cost = Math.min(1, evRate / (basePeak + 1e-9));
+  $('costPct').textContent = Math.round(cost*100) + '%';
+  $('costPct').style.color = cost < 0.12 ? '#7fc97f' : '';
+  $('stats').textContent =
+    `grid ${GW}×${GH} · lag ${LAG} · ~${(N*4/1000).toFixed(0)}k mults/frame · ${fps.toFixed(0)} fps`;
+}
+
+// ---- main loop ----
+let frame = 0;
+function loop(now) {
+  fps = 0.9*fps + 0.1*(1000/Math.max(1, now - lastT)); lastT = now;
+  t++;
+
+  // synthetic frames also pass through the canvas so display == input
+  if (!camOn) {
+    synthInto(lumaTmp, stim, t);
+    const img = sctx.createImageData(GW, GH);
+    for (let i = 0, j = 0; i < N; i++, j += 4) {
+      const v = Math.max(0, Math.min(255, lumaTmp[i]*255))|0;
+      img.data[j]=v; img.data[j+1]=v; img.data[j+2]=v; img.data[j+3]=255;
+    }
+    sctx.putImageData(img, 0, 0);
+  }
+
+  head = (head + 1) % NB;
+  grabLuma(buf[head]);
+  if (filled < NB) filled++;
+
+  if (filled === NB) {
+    const cur = buf[head], old = buf[(head+1)%NB], prev = buf[(head-1+NB)%NB];
+    const m = compute(cur, old, fx, fy);
+    sx = SMOOTH*sx + (1-SMOOTH)*m.nx;
+    sy = SMOOTH*sy + (1-SMOOTH)*m.ny;
+    sc = SMOOTH*sc + (1-SMOOTH)*m.curl;
+    sd = SMOOTH*sd + (1-SMOOTH)*m.div;
+    let e = 0; for (let i = 0; i < N; i++) e += Math.abs(cur[i]-prev[i]);
+    evRate = e/N;
+    basePeak = Math.max(basePeak*0.995, evRate);
+    sparkHist.push(Math.min(1, evRate/(basePeak+1e-9))); sparkHist.shift();
+  }
+
+  drawStage();
+  if ((frame++ & 1) === 0) { drawGauges(); drawSpark(); updateText(); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---- controls ----
+document.querySelectorAll('[data-stim]').forEach(b => b.addEventListener('click', () => {
+  camOn = false; stim = b.dataset.stim;
+  document.querySelectorAll('.btns button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  $('stageLabel').textContent = STIM_LABEL[stim];
+  $('camErr').style.display = 'none';
+}));
+
+$('bCam').addEventListener('click', async () => {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    video.srcObject = s; await video.play();
+    camOn = true;
+    document.querySelectorAll('.btns button').forEach(x => x.classList.remove('active'));
+    $('bCam').classList.add('active');
+    $('stageLabel').textContent = 'camera · mirrored · wave, spin a hand, lean in';
+    $('camErr').style.display = 'none';
+  } catch (e) {
+    $('camErr').style.display = 'block';
+  }
+});
+
+// ---- self-test: eight motions with known answers ----
+$('bTest').addEventListener('click', () => {
+  const tests = [
+    ['drift →',  'gr',  m => m.nx,   +1],
+    ['drift ←',  'gl',  m => m.nx,   -1],
+    ['drift ↓',  'gd',  m => m.ny,   +1],
+    ['drift ↑',  'gu',  m => m.ny,   -1],
+    ['spin cw',  'cw',  m => m.curl, +1],
+    ['spin ccw', 'ccw', m => m.curl, -1],
+    ['approach', 'zi',  m => m.div,  +1],
+    ['recede',   'zo',  m => m.div,  -1],
+  ];
+  const tbl = $('testTbl'); tbl.style.display = ''; tbl.innerHTML = '';
+  let pass = 0;
+  for (const [name, kind, pick, want] of tests) {
+    const g = Array.from({length: NB}, () => new Float32Array(N));
+    let acc = 0;
+    for (let f = 0; f < 26; f++) {
+      synthInto(g[f % NB], kind, f);
+      if (f >= NB - 1) acc += pick(compute(g[f % NB], g[(f+1) % NB], null, null));
+    }
+    const ok = Math.sign(acc) === want; if (ok) pass++;
+    tbl.insertAdjacentHTML('beforeend',
+      `<tr><td>${name}</td><td class="r">${(acc>=0?'+':'')+acc.toExponential(1)}</td>
+       <td class="${ok?'ok':'bad'}">${ok?'✓ sign':'✗'}</td></tr>`);
+  }
+  tbl.insertAdjacentHTML('beforeend',
+    `<tr><td>result</td><td class="r" colspan="2">${pass}/8 correct · zero parameters</td></tr>`);
+});
+</script>
+</body>
+</html>
