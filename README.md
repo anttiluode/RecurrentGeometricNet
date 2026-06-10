@@ -1,5 +1,7 @@
 # Dynamic Geometric Net — the trainable v5
 
+EDIT: Added chiral depth html app by fable that uses this to do depth. 
+
 EDIT: Try the live app using this (coded by fable)
 
 https://anttiluode.github.io/RecurrentGeometricNet/
