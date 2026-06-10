@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Music → Motion Webcam Manifold</title>
+<style>
+html,body{
+  margin:0;
+  height:100%;
+  background:#000;
+  overflow:hidden;
+  font-family:system-ui;
+}
+#c{
+  width:100%;
+  height:100%;
+  display:block;
+}
+#ui{
+  position:fixed;
+  top:10px; left:10px;
+  color:#aaa;
+  font-size:12px;
+  z-index:2;
+}
+button{
+  background:#111;
+  color:#ddd;
+  border:1px solid #333;
+  padding:6px 10px;
+  margin-right:6px;
+  cursor:pointer;
+}
+button:hover{border-color:#666}
+input{color:#aaa}
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <button id="camBtn">Start Camera</button>
+  <input id="file" type="file" accept="audio/*">
+  <button id="play">Play</button>
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+  canvas.width = innerWidth;
+  canvas.height = innerHeight;
+}
+addEventListener("resize", resize);
+resize();
+
+// ---------- VIDEO ----------
+const video = document.createElement("video");
+video.autoplay = true;
+video.playsInline = true;
+
+// ---------- AUDIO ----------
+let audioCtx, analyser, freq;
+let audioSource;
+
+// smooth manifold state
+let mx=0, my=0, curl=0, div=0;
+let phase = 0;
+
+// FFT bins grouping
+function getBands(data){
+  const n = data.length;
+  const bass = avg(data, 0, n*0.08);
+  const mid  = avg(data, n*0.08, n*0.3);
+  const high = avg(data, n*0.3, n*0.7);
+  return {bass, mid, high};
+}
+
+function avg(arr,a,b){
+  let s=0;
+  for(let i=a|0;i<b|0;i++) s+=arr[i];
+  return s/(b-a+1);
+}
+
+// ---------- CAMERA ----------
+document.getElementById("camBtn").onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({video:true});
+  video.srcObject = stream;
+};
+
+// ---------- AUDIO FILE ----------
+document.getElementById("file").onchange = (e)=>{
+  const file = e.target.files[0];
+  const url = URL.createObjectURL(file);
+  const a = new Audio(url);
+  a.crossOrigin = "anonymous";
+  a.loop = true;
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  freq = new Uint8Array(analyser.frequencyBinCount);
+
+  audioSource = audioCtx.createMediaElementSource(a);
+  audioSource.connect(analyser);
+  analyser.connect(audioCtx.destination);
+
+  a.play();
+};
+
+document.getElementById("play").onclick = ()=>{
+  if(audioCtx) audioCtx.resume();
+};
+
+// ---------- CORE MANIFOLD ----------
+function updateManifold(){
+  if(!analyser) return;
+
+  analyser.getByteFrequencyData(freq);
+  const {bass, mid, high} = getBands(freq);
+
+  // normalize
+  const b = bass/255;
+  const m = mid/255;
+  const h = high/255;
+
+  // MUSIC → MOTION FIELD (key mapping)
+  const targetMx = (b - 0.5) * 2.0;   // drift X
+  const targetMy = (m - 0.5) * 2.0;   // drift Y
+  const targetCurl = (h - 0.5) * 2.5; // rotation field
+  const targetDiv = (b + h - 1) * 1.5;// expansion
+
+  // smooth (this is your "manifold inertia")
+  mx += (targetMx - mx) * 0.08;
+  my += (targetMy - my) * 0.08;
+  curl += (targetCurl - curl) * 0.06;
+  div += (targetDiv - div) * 0.06;
+
+  phase += 0.02;
+}
+
+// ---------- IMAGE WARP ----------
+function draw(){
+  if(video.readyState >= 2){
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // draw base frame small → big upscale later
+    const cw = 240;
+    const ch = 180;
+
+    const temp = document.createElement("canvas");
+    temp.width = cw;
+    temp.height = ch;
+    const tctx = temp.getContext("2d");
+
+    tctx.drawImage(video,0,0,cw,ch);
+    const frame = tctx.getImageData(0,0,cw,ch);
+    const data = frame.data;
+
+    const out = ctx.createImageData(cw,ch);
+    const od = out.data;
+
+    // motion field warp
+    for(let y=0;y<ch;y++){
+      for(let x=0;x<cw;x++){
+
+        const i = (y*cw + x)*4;
+
+        // normalized coords
+        const nx = (x/cw - 0.5);
+        const ny = (y/ch - 0.5);
+
+        // FLOW FIELD (no graphics, just physics)
+        let dx = mx + curl * (-ny) + div * nx;
+        let dy = my + curl * (nx) + div * ny;
+
+        // subtle wave interference (music feel)
+        dx += Math.sin(ny*6 + phase)*0.3;
+        dy += Math.cos(nx*6 + phase)*0.3;
+
+        const sx = Math.min(cw-1, Math.max(0, x + dx*6));
+        const sy = Math.min(ch-1, Math.max(0, y + dy*6));
+
+        const si = ((sx|0) + (sy|0)*cw)*4;
+
+        od[i]   = data[si];
+        od[i+1] = data[si+1];
+        od[i+2] = data[si+2];
+        od[i+3] = 255;
+      }
+    }
+
+    // upscale to screen
+    const tmp2 = document.createElement("canvas");
+    tmp2.width = cw;
+    tmp2.height = ch;
+    tmp2.getContext("2d").putImageData(out,0,0);
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(tmp2,0,0,w,h);
+  }
+}
+
+// ---------- LOOP ----------
+function loop(){
+  updateManifold();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+
+</body>
+</html>
